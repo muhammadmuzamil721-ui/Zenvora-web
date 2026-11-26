@@ -685,6 +685,7 @@ const Store={
   },
   watch(key,cb){
     if(this.mode==='cloud'){
+      if(window.ZV_FB) return this.ref(key).onSnapshot({includeMetadataChanges:true},s=>cb(s.exists?clone(s.data()):null,s.metadata,null),e=>cb(undefined,null,e));
       return this.ref(key).onSnapshot(s=>cb(s.exists?clone(s.data()):null,s.metadata,null),e=>cb(undefined,null,e));
     }
     let v=null; try{v=JSON.parse(localStorage.getItem('mh:'+key));}catch(e){}
