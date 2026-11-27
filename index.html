@@ -422,6 +422,34 @@ nav.tabs .fab{justify-self:center;width:58px;height:58px;border-radius:50%;backg
 <script src="firebase-app-compat.js"></script>
 <script src="firebase-auth-compat.js"></script>
 <script src="firebase-firestore-compat.js"></script>
+<script type="module">
+import {initializeApp} from './firebase-app.js';
+import {getAI,getGenerativeModel,GoogleAIBackend} from './firebase-ai.js';
+try{
+  const app=initializeApp(window.ZV_FB,'zv-ai');
+  const ai=getAI(app,{backend:new GoogleAIBackend()});
+  const MODELS=['gemini-2.5-flash','gemini-flash-latest','gemini-2.5-flash-lite'];
+  let mi=0;
+  const toContents=inp=>typeof inp==='string'?[{role:'user',parts:[{text:inp}]}]:inp.map(m=>({role:m.role==='assistant'?'model':'user',parts:[{text:String(m.content||'')}]}));
+  async function run(inp,opts){
+    opts=opts||{}; let lastErr=null;
+    for(let k=mi;k<MODELS.length;k++){
+      const model=getGenerativeModel(ai,{model:MODELS[k]});
+      try{
+        const req={contents:toContents(inp)};
+        if(typeof opts.onText==='function'){
+          const r=await model.generateContentStream(req); let acc='';
+          for await (const ch of r.stream){ if(opts.signal&&opts.signal.aborted) break; let tx=''; try{ tx=ch.text(); }catch(e){} acc+=tx; opts.onText({text:acc}); }
+          mi=k; return {text:acc};
+        }
+        const r=await model.generateContent(req); mi=k; return {text:r.response.text()};
+      }catch(e){ lastErr=e; if(/not.?found|404|not supported|unsupported/i.test(String(e&&e.message||''))) continue; throw e; }
+    }
+    throw lastErr||new Error('AI unavailable');
+  }
+  window.ZV_GEMINI=run; window.dispatchEvent(new Event('zv-gemini'));
+}catch(e){ console.error('Gemini setup failed',e); }
+</script>
 <script>
 (function(){
 /* ---------- language ---------- */
@@ -2232,6 +2260,7 @@ Store.init().then(()=>{
   if(Store.mode!=='cloud') setSync('');
   watchSettings(); watchMonth(); watchUd(); loadAllSavings();
   if(window.claude&&typeof claude.use==='function') claude.use('sample').then(f=>{ sampleFn=f||null; render(); }).catch(()=>{});
+  if(window.ZV_FB){ const setG=()=>{ if(window.ZV_GEMINI&&sampleFn!==window.ZV_GEMINI){ sampleFn=window.ZV_GEMINI; render(); } }; window.addEventListener('zv-gemini',setG); setG(); }
   if(window.claude&&typeof claude.use==='function') claude.use('user').then(u=>u&&u.me&&u.me()).then(m=>{ if(m&&m.name){ userName=m.name; render(); } }).catch(()=>{});
   if(window.claude&&typeof claude.use==='function') claude.use('dictation').then(d=>{ dictNS=d||null; }).catch(()=>{});
 });
