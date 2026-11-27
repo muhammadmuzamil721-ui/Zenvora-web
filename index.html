@@ -425,8 +425,10 @@ nav.tabs .fab{justify-self:center;width:58px;height:58px;border-radius:50%;backg
 <script type="module">
 import {initializeApp} from './firebase-app.js';
 import {getAI,getGenerativeModel,GoogleAIBackend} from './firebase-ai.js';
+import {initializeAppCheck,ReCaptchaEnterpriseProvider} from './firebase-app-check.js';
 try{
   const app=initializeApp(window.ZV_FB,'zv-ai');
+  try{ initializeAppCheck(app,{provider:new ReCaptchaEnterpriseProvider('6LdkaTUuAAAAAMM-Weqrxp88UmARipUfMrjf99vZ'),isTokenAutoRefreshEnabled:true}); }catch(e){ console.error('App Check setup failed',e); }
   const ai=getAI(app,{backend:new GoogleAIBackend()});
   const MODELS=['gemini-2.5-flash','gemini-flash-latest','gemini-2.5-flash-lite'];
   let mi=0;
@@ -1192,7 +1194,7 @@ Note: ${aiQ}`;
         else if(c==='session_expired') aiMsg=t('aiSignIn');
         else if(['sampling_disabled','not_declared','capability_disabled','capability_removed'].includes(c)) aiMsg=t('aiOff');
         else if(c==='upstream_error') aiMsg=t('aiNet');
-        else aiMsg=t('aiFail')+(c&&c!=='parse'?' ('+c+')':'');
+        else aiMsg=t('aiFail')+(c&&c!=='parse'?' ('+c+')':'')+(window.ZV_FB&&e&&e.message?' — '+String(e.message).slice(0,160):'');
       }
       redraw();
     };
@@ -1746,7 +1748,7 @@ function aiErr(e){
   if(c==='session_expired') return t('aiSignIn');
   if(['sampling_disabled','not_declared','capability_disabled','capability_removed'].includes(c)) return t('aiOff');
   if(c==='upstream_error') return t('aiNet');
-  return t('aiFail')+(c?' ('+c+')':'');
+  return t('aiFail')+(c?' ('+c+')':'')+(window.ZV_FB&&e&&e.message?' — '+String(e.message).slice(0,160):'');
 }
 function aiContext(){
   const docs={...savDocs,['m-'+cur]:month};
@@ -2154,7 +2156,7 @@ async function setupCsv(){
 
 /* ---------- events ---------- */
 let toastT=null;
-function toast(m){ const el=$('#toast'); el.textContent=m; el.classList.add('show'); clearTimeout(toastT); toastT=setTimeout(()=>el.classList.remove('show'),2200); }
+function toast(m){ const el=$('#toast'); el.textContent=m; el.classList.add('show'); clearTimeout(toastT); toastT=setTimeout(()=>el.classList.remove('show'),Math.max(2200,Math.min(9000,String(m).length*70))); }
 
 document.querySelectorAll('nav.tabs [data-tab]').forEach(b=>b.addEventListener('click',()=>goMain(b.dataset.tab)));
 $('#fab').addEventListener('click',()=>openEntry(null));
