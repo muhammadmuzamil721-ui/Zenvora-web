@@ -428,27 +428,41 @@ nav.tabs .fab{justify-self:center;width:58px;height:58px;border-radius:50%;backg
 <script type="module">
 import {initializeApp} from './firebase-app.js';
 import {getAI,getGenerativeModel,GoogleAIBackend} from './firebase-ai.js';
-import {initializeAppCheck,ReCaptchaEnterpriseProvider} from './firebase-app-check.js';
+import {initializeAppCheck,ReCaptchaEnterpriseProvider,getToken} from './firebase-app-check.js';
 try{
   const app=initializeApp(window.ZV_FB,'zv-ai');
-  try{ initializeAppCheck(app,{provider:new ReCaptchaEnterpriseProvider('6LdFVzUuAAAAANUjjHCvfaSJd8MRgj2ycxgpwzYX'),isTokenAutoRefreshEnabled:true}); }catch(e){ console.error('App Check setup failed',e); }
+  let ac=null; try{ ac=initializeAppCheck(app,{provider:new ReCaptchaEnterpriseProvider('6LdFVzUuAAAAANUjjHCvfaSJd8MRgj2ycxgpwzYX'),isTokenAutoRefreshEnabled:true}); }catch(e){ console.error('App Check setup failed',e); }
+  const withTimeout=(p,ms,what)=>Promise.race([p,new Promise((_,rej)=>setTimeout(()=>rej(Object.assign(new Error(what+' timeout ('+Math.round(ms/1000)+'s)'),{code:'timeout'})),ms))]);
   const ai=getAI(app,{backend:new GoogleAIBackend()});
   const MODELS=['gemini-3.5-flash','gemini-3.1-flash-lite','gemini-3.5-flash-lite','gemini-3.6-flash','gemini-flash-latest'];
   let mi=0;
   const toContents=inp=>typeof inp==='string'?[{role:'user',parts:[{text:inp}]}]:inp.map(m=>({role:m.role==='assistant'?'model':'user',parts:[{text:String(m.content||'')}]}));
   async function run(inp,opts){
     opts=opts||{}; let lastErr=null;
+    if(ac){ try{ await withTimeout(getToken(ac,false),15000,'App Check'); }catch(e){ console.error('[Zenvora AI] App Check',e); throw Object.assign(new Error('App Check: '+String(e&&e.message||e)),{code:'appcheck'}); } }
     for(let k=mi;k<MODELS.length;k++){
-      const model=getGenerativeModel(ai,{model:MODELS[k]});
-      try{
-        const req={contents:toContents(inp)};
-        if(typeof opts.onText==='function'){
-          const r=await model.generateContentStream(req); let acc='';
-          for await (const ch of r.stream){ if(opts.signal&&opts.signal.aborted) break; let tx=''; try{ tx=ch.text(); }catch(e){} acc+=tx; opts.onText({text:acc}); }
-          mi=k; return {text:acc};
+      for(const thin of [true,false]){
+        const cfg={model:MODELS[k]}; if(thin) cfg.generationConfig={thinkingConfig:{thinkingLevel:'MINIMAL'}};
+        const model=getGenerativeModel(ai,cfg); const t0=Date.now();
+        try{
+          const req={contents:toContents(inp)};
+          if(typeof opts.onText==='function'){
+            const r=await withTimeout(model.generateContentStream(req),30000,MODELS[k]); let acc='';
+            const it=r.stream[Symbol.asyncIterator]();
+            while(true){ const nx=await withTimeout(it.next(),30000,MODELS[k]); if(nx.done) break; if(opts.signal&&opts.signal.aborted) break; let tx=''; try{ tx=nx.value.text(); }catch(e){} acc+=tx; opts.onText({text:acc}); }
+            console.info('[Zenvora AI] '+MODELS[k]+(thin?' (minimal thinking)':'')+' ok in '+(Date.now()-t0)+'ms');
+            mi=k; return {text:acc};
+          }
+          const r=await withTimeout(model.generateContent(req),30000,MODELS[k]);
+          console.info('[Zenvora AI] '+MODELS[k]+(thin?' (minimal thinking)':'')+' ok in '+(Date.now()-t0)+'ms');
+          mi=k; return {text:r.response.text()};
+        }catch(e){
+          lastErr=e; const m=String(e&&e.message||''); console.warn('[Zenvora AI] '+MODELS[k]+(thin?' (minimal thinking)':'')+' failed: '+m.slice(0,200));
+          if(thin&&/thinking|unsupported|invalid|400/i.test(m)) continue;
+          if(/timeout|not.?found|404|500|503|internal|not supported|unsupported|billing|unavailable|429|quota/i.test(m)) break;
+          throw e;
         }
-        const r=await model.generateContent(req); mi=k; return {text:r.response.text()};
-      }catch(e){ lastErr=e; if(/not.?found|404|500|503|internal|not supported|unsupported|billing|unavailable/i.test(String(e&&e.message||''))) continue; throw e; }
+      }
     }
     throw lastErr||new Error('AI unavailable');
   }
