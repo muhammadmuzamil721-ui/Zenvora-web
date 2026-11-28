@@ -825,7 +825,13 @@ const Store={
     while(this.pending[key]){
       const d=this.pending[key]; this.pending[key]=null;
       try{
-        if(this.mode==='cloud') await this.ref(key).set(d);
+        if(this.mode==='cloud'){
+          const fsx=window.firebase&&firebase.firestore&&firebase.firestore();
+          if(key.startsWith('m-')&&fsx&&fsx.runTransaction&&navigator.onLine!==false){
+            try{ const ref=this.ref(key); await Promise.race([fsx.runTransaction(async tr=>{ const sd=await tr.get(ref); tr.set(ref,mergeMonth(sd.exists?sd.data():null,d)); }),new Promise((_,rej)=>setTimeout(()=>rej(new Error('slow')),8000))]); }
+            catch(e2){ await this.ref(key).set(d); }
+          } else await this.ref(key).set(d);
+        }
         else localStorage.setItem('mh:'+key,JSON.stringify(d));
       }catch(e){
         if(e && e.code==='unavailable'){ await new Promise(r=>setTimeout(r,800+Math.random()*800)); if(!this.pending[key]) this.pending[key]=d; }
@@ -880,6 +886,13 @@ function watchMonth(){
   });
 }
 const saveMonth=()=>Store.save('m-'+cur,month);
+/* several phones can edit the same month: keep everyone's entries, honour deletions */
+function mergeMonth(sv,lc){
+  if(!sv) return lc;
+  const del=new Set([...(Array.isArray(sv.del)?sv.del:[]),...(Array.isArray(lc.del)?lc.del:[])]);
+  const map=new Map(); (Array.isArray(sv.tx)?sv.tx:[]).forEach(x=>x&&map.set(x.id,x)); (Array.isArray(lc.tx)?lc.tx:[]).forEach(x=>x&&map.set(x.id,x));
+  return {...sv,...lc,tx:[...map.values()].filter(x=>!del.has(x.id)),del:[...del].slice(-500),rec:{...(sv.rec||{}),...(lc.rec||{})}};
+}
 const saveSettings=()=>Store.save('settings',settings);
 
 /* ---------- calc ---------- */
@@ -1220,7 +1233,7 @@ function openEntry(existing,preset){
         sync(); aiQ=base; redraw();
       }
       else if(b.hasAttribute('data-del')){
-        askConfirm(t('confirmDel'),t('del'),()=>{ month.tx=month.tx.filter(y=>y.id!==existing.id); savDocs['m-'+cur]=month; saveMonth(); render(); toast(t('deleted')); });
+        askConfirm(t('confirmDel'),t('del'),()=>{ month.tx=month.tx.filter(y=>y.id!==existing.id); month.del=[...(month.del||[]),existing.id]; savDocs['m-'+cur]=month; saveMonth(); render(); toast(t('deleted')); });
       }
       else if(b.hasAttribute('data-save')){
         sync();
