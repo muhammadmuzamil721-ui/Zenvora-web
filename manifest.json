@@ -1,7 +1,7 @@
 {
-  "name": "Zenvora",
-  "short_name": "Zenvora",
-  "description": "Smart Finance. Better Life. Ghar ka poora hisaab ek jagah.",
+  "name": "MS ZENVORA",
+  "short_name": "MS Zenvora",
+  "description": "Your Money. Your Control. Personal Finance Management — Smart Finance, Better Life.",
   "start_url": "./",
   "scope": "./",
   "display": "standalone",
@@ -9,10 +9,28 @@
   "background_color": "#EDF0EB",
   "theme_color": "#1C1C1E",
   "lang": "en",
-  "categories": ["finance", "productivity"],
+  "categories": [
+    "finance",
+    "productivity"
+  ],
   "icons": [
-    { "src": "icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
-    { "src": "icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
-    { "src": "icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+    {
+      "src": "icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
   ]
 }
