@@ -2219,6 +2219,7 @@ function onSettingsLoaded(){
   checkMeezan();
   if(settings.famCode&&!settings.famOwner) famWatchInbox();
   if(settings.famOwner){ hhAcct(); famWatchGrants(); }
+  setTimeout(famCheck,1500);
 }
 document.addEventListener('visibilitychange',()=>{
   if(document.hidden){ lastHidden=Date.now(); if(unlocked){ try{ sessionStorage.setItem('zv:unl',String(Date.now())); }catch(e){} } return; }
@@ -2233,14 +2234,42 @@ function famCodeGen(){ const a='ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; let c=''; cry
 function famMe(){ const u=firebase.auth().currentUser; return {uid:u.uid,name:cleanName(u.displayName||u.email||''),email:u.email||''}; }
 async function famCreateInvite(){ let code=settings.famCode; if(!code){ code=famCodeGen(); const me=famMe(); await FS().collection('invites').doc(code).set({owner:me.uid,name:me.name,ts:Date.now()}); settings={...settings,famCode:code}; saveSettings(); famWatchInbox(); } return code; }
 async function famJoin(code){ code=String(code||'').toUpperCase().replace(/[^A-Z0-9]/g,''); if(code.length<4) throw new Error('bad'); const me=famMe(); const d=await FS().collection('invites').doc(code).get(); if(!d.exists) throw new Error('bad'); const o=d.data(); if(o.owner===me.uid) throw new Error('self'); await FS().collection('users').doc(o.owner).collection('family').doc(me.uid).set({name:me.name,email:me.email,code,ts:Date.now()}); const fresh=!Array.isArray(settings.banks)||!settings.banks.length||(settings.banks.length===1&&settings.banks[0].id==='b1'&&!(+settings.banks[0].open)&&!month.tx.length); settings={...settings,famOwner:{uid:o.owner,name:o.name||''}}; if(fresh){ const cid='acash'+uid().slice(-4); settings.banks=[{id:cid,name:t('kCash'),kind:'cash',open:0,since:Date.now()}]; settings.lastAcct=cid; } saveSettings(); hhAcct(); famWatchGrants(); render(); return o.name||''; }
-async function famLeave(){ const f=settings.famOwner; if(f){ try{ await FS().collection('users').doc(f.uid).collection('family').doc(famMe().uid).delete(); }catch(e){} } settings={...settings,famOwner:null}; saveSettings(); if(grUnsub){ try{grUnsub();}catch(e){} grUnsub=null; } }
+async function famLeave(){ const f=settings.famOwner; if(f){ try{ await FS().collection('users').doc(f.uid).collection('family').doc(famMe().uid).delete(); }catch(e){} } settings={...settings,famOwner:null}; saveSettings(); if(grUnsub){ try{grUnsub();}catch(e){} grUnsub=null; } famDropAcct(b=>!!b.household); }
+/* add one family entry exactly once, even with several phones/tabs open */
+async function famAddOnce(srcRef,rec){
+  const key='m-'+rec.date.slice(0,7); const mref=Store.ref(key);
+  if(FS().runTransaction){
+    let added=false;
+    await FS().runTransaction(async tr=>{
+      const sd=await tr.get(srcRef); if(!sd.exists||sd.data().imported) return;
+      const ms=await tr.get(mref); const d=ms.exists?ms.data():{tx:[],bills:{}};
+      const tx=Array.isArray(d.tx)?d.tx:[];
+      if(!tx.some(x=>x.id===rec.id)) d.tx=[...tx,rec];
+      tr.set(mref,d); tr.update(srcRef,{imported:true,importedAt:Date.now()}); added=true;
+    });
+    if(added) famLocal(key,rec);
+    return added;
+  }
+  const sd=await srcRef.get(); if(!sd.exists||sd.data().imported) return false;
+  const ms=await mref.get(); const d=ms.exists?ms.data():{tx:[],bills:{}}; const tx=Array.isArray(d.tx)?d.tx:[];
+  if(!tx.some(x=>x.id===rec.id)){ d.tx=[...tx,rec]; await mref.set(d); }
+  await srcRef.update({imported:true,importedAt:Date.now()}); famLocal(key,rec); return true;
+}
+function famLocal(key,rec){ if(key==='m-'+cur&&monthLoaded&&!month.tx.some(x=>x.id===rec.id)){ month={...month,tx:[...month.tx,rec]}; render(); } }
+function famDropAcct(pred){ const bs=banks(); const keep=bs.filter(b=>!pred(b)); if(keep.length!==bs.length){ settings={...settings,banks:keep.length?keep:bs.filter(b=>!b.household&&!b.member)}; if(settings.lastAcct&&!keep.some(b=>b.id===settings.lastAcct)) settings.lastAcct=(keep[0]||{}).id||''; saveSettings(); render(); } }
+async function famCheck(){
+  if(!famEnabled()) return;
+  if(settings.famOwner){ try{ const d=await FS().collection('users').doc(settings.famOwner.uid).collection('family').doc(Store.uid).get(); if(!d.exists){ settings={...settings,famOwner:null}; saveSettings(); if(grUnsub){ try{grUnsub();}catch(e){} grUnsub=null; } famDropAcct(b=>!!b.household); } }catch(e){} }
+  else if(banks().some(b=>b.household)) famDropAcct(b=>!!b.household);
+  if(settings.famCode){ const ms=await famLoadMembers(); const ids=new Set(ms.map(m=>'fm_'+m.uid.slice(0,20))); famDropAcct(b=>b.member&&!ids.has(b.id)); }
+}
 function hhAcct(){ const f=settings.famOwner; if(!f) return ''; const id='hh_'+f.uid.slice(0,20); if(!acctById(id)){ settings={...settings,banks:[...banks(),{id,name:t('famHH',f.name||''),kind:'cash',household:f.uid,open:0,since:0}]}; saveSettings(); } return id; }
 async function famGrant(rec){ const a=acctById(rec.to); if(!a||!a.member||!famEnabled()) return; const me=famMe(); await FS().collection('users').doc(a.member).collection('grants').add({amt:rec.amt,date:rec.date,note:rec.note||'',from:me.uid,fromName:me.name,imported:false,ts:Date.now()}); }
 let grUnsub=null, grBusy=new Set();
-function famWatchGrants(){ if(grUnsub||!famEnabled()||!settings.famOwner) return; grUnsub=FS().collection('users').doc(Store.uid).collection('grants').where('imported','==',false).onSnapshot(async qs=>{ for(const d of qs.docs){ if(grBusy.has(d.id)) continue; grBusy.add(d.id); try{ const v=d.data(); const to=hhAcct(); const date=/^\d{4}-\d{2}-\d{2}$/.test(v.date||'')?v.date:todayStr; const key='m-'+date.slice(0,7); const rec={id:uid(),t:'tr',cat:'transfer',amt:Math.round((+v.amt||0)*100)/100,to,date,note:t('famGot',v.fromName||'')}; if(rec.amt>0){ if(key==='m-'+cur&&monthLoaded){ month.tx=[...month.tx,rec]; saveMonth(); render(); } else { const r=Store.ref(key); const s2=await r.get(); const dd=s2.exists?s2.data():{tx:[],bills:{}}; dd.tx=[...(Array.isArray(dd.tx)?dd.tx:[]),rec]; await r.set(dd); } notifyPhone(t('famGotN',fmt(rec.amt),v.fromName||''),t('gmTap'),'grant'); toast(t('famGotN',fmt(rec.amt),v.fromName||'')); } await d.ref.update({imported:true}); }catch(e){} } },()=>{}); }
+function famWatchGrants(){ if(grUnsub||!famEnabled()||!settings.famOwner) return; grUnsub=FS().collection('users').doc(Store.uid).collection('grants').where('imported','==',false).onSnapshot(async qs=>{ for(const d of qs.docs){ if(grBusy.has(d.id)) continue; grBusy.add(d.id); try{ const v=d.data(); const to=hhAcct(); const date=/^\d{4}-\d{2}-\d{2}$/.test(v.date||'')?v.date:todayStr; const rec={id:'g_'+d.id,t:'tr',cat:'transfer',amt:Math.round((+v.amt||0)*100)/100,to,date,note:t('famGot',v.fromName||'')}; if(!(rec.amt>0)){ await d.ref.update({imported:true}); continue; } const added=await famAddOnce(d.ref,rec); if(added){ notifyPhone(t('famGotN',fmt(rec.amt),v.fromName||''),t('gmTap'),'grant'); toast(t('famGotN',fmt(rec.amt),v.fromName||'')); } }catch(e){ grBusy.delete(d.id); } } },()=>{}); }
 async function famSend(rec){ const f=settings.famOwner; if(!f||!famEnabled()) return; const me=famMe(); const {id,acct,to,bank,goal,...rest}=rec; await FS().collection('users').doc(f.uid).collection('inbox').add({...rest,srcId:id,by:me.uid,byName:me.name,imported:false,ts:Date.now()}); }
 async function famLoadMembers(){ try{ const q=await FS().collection('users').doc(Store.uid).collection('family').get(); famMembers=q.docs.map(d=>({uid:d.id,...d.data()})); }catch(e){ famMembers=[]; } return famMembers; }
-async function famRemove(id){ try{ await FS().collection('users').doc(Store.uid).collection('family').doc(id).delete(); }catch(e){} famMembers=(famMembers||[]).filter(m=>m.uid!==id); }
+async function famRemove(id){ try{ await FS().collection('users').doc(Store.uid).collection('family').doc(id).delete(); }catch(e){} famMembers=(famMembers||[]).filter(m=>m.uid!==id); famDropAcct(b=>b.member===id); }
 function famWatchInbox(){ if(famUnsub||!famEnabled()||!settings.famCode) return; famUnsub=FS().collection('users').doc(Store.uid).collection('inbox').where('imported','==',false).onSnapshot(async qs=>{ for(const d of qs.docs){ try{ await famImport(d.ref,d.data()); }catch(e){} } },()=>{}); }
 let famImporting=new Set();
 function famAcct(memberUid,name){
@@ -2252,16 +2281,15 @@ function famAcct(memberUid,name){
 function famMonthStats(acctId){ let given=0,spent=0; (month.tx||[]).forEach(x=>{ flowsOf(x).forEach(([id,v])=>{ if(id===acctId){ if(v>0) given+=v; else spent+=-v; } }); }); return {given,spent}; }
 async function famImport(ref,v){
   if(famImporting.has(ref.id)) return; famImporting.add(ref.id);
-  const date=/^\d{4}-\d{2}-\d{2}$/.test(v.date||'')?v.date:todayStr; const key='m-'+date.slice(0,7);
-  const rec={id:uid(),t:['exp','inc','sav','tr'].includes(v.t)?v.t:'exp',amt:Math.round((+v.amt||0)*100)/100,cat:String(v.cat||'misc'),note:String(v.note||'').slice(0,80),date,mode:v.mode||'',by:v.by||'',byName:String(v.byName||'').slice(0,40)};
-  if(v.oc) rec.oc=v.oc;
-  if(rec.t==='exp'&&rec.by){ const aid=famAcct(rec.by,rec.byName); if(aid) rec.acct=aid; }
-  if(rec.amt>0&&rec.t==='exp'){
-    if(key==='m-'+cur&&monthLoaded){ month.tx=[...month.tx,rec]; saveMonth(); render(); }
-    else { const r=Store.ref(key); const s2=await r.get(); const d=s2.exists?s2.data():{tx:[],bills:{}}; d.tx=[...(Array.isArray(d.tx)?d.tx:[]),rec]; await r.set(d); }
-    notifyPhone(t('famNew',rec.byName||'Family',fmt(rec.amt)),rec.note||cn(catOf(rec.cat,rec.t)),'fam');
-  }
-  await ref.update({imported:true,importedAt:Date.now()});
+  try{
+    const date=/^\d{4}-\d{2}-\d{2}$/.test(v.date||'')?v.date:todayStr;
+    const rec={id:'f_'+ref.id,t:['exp','inc','sav','tr'].includes(v.t)?v.t:'exp',amt:Math.round((+v.amt||0)*100)/100,cat:String(v.cat||'misc'),note:String(v.note||'').slice(0,80),date,mode:v.mode||'',by:v.by||'',byName:String(v.byName||'').slice(0,40)};
+    if(v.oc) rec.oc=v.oc;
+    if(!(rec.amt>0&&rec.t==='exp')){ await ref.update({imported:true}); return; }
+    const aid=famAcct(rec.by,rec.byName); if(aid) rec.acct=aid;
+    const added=await famAddOnce(ref,rec);
+    if(added) notifyPhone(t('famNew',rec.byName||'Family',fmt(rec.amt)),rec.note||cn(catOf(rec.cat,rec.t)),'fam');
+  }catch(e){ famImporting.delete(ref.id); }
 }
 function famSectionHTML(){
   if(!famEnabled()) return '';
@@ -2275,6 +2303,7 @@ function famSectionHTML(){
   </div>`;
 }
 function famFillList(root){ const el=root.querySelector('#famList'); if(!el||!settings.famCode||settings.famOwner) return; famLoadMembers().then(ms=>{ if(!el.isConnected) return;
+  { const ids=new Set(ms.map(m=>'fm_'+m.uid.slice(0,20))); famDropAcct(b=>b.member&&!ids.has(b.id)); }
   if(!ms.length){ el.innerHTML=t('famNone'); return; }
   const bb=bankBalances();
   el.innerHTML=`<b style="display:block;margin-bottom:6px;color:var(--ink)">${t('famMembers')}</b>`+ms.map(m=>{ const aid=famAcct(m.uid,m.name||m.email||''); const st=famMonthStats(aid); const bal=bb[aid]||0;
